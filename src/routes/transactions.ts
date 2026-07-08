@@ -4,8 +4,10 @@ import type { AuthedRequest } from '../middleware/auth';
 import {
   createTransactionSchema,
   listTransactionsQuerySchema,
+  transactionIdParamSchema,
+  updateTransactionSchema,
 } from '../schemas/transaction';
-import type { TransactionsRepo } from '../repos/transactionsRepo';
+import type { TransactionsRepo, UpdateDerived } from '../repos/transactionsRepo';
 
 /**
  * Transactions router - the fully-built example endpoint pair.
@@ -68,6 +70,51 @@ export function transactionsRouter(repo: TransactionsRepo, categorize: Categoriz
       const query = listTransactionsQuerySchema.parse(req.query);
       const result = await repo.list(req.user!.uid, query);
       return res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(422).json({ error: 'validation failed', issues: err.issues });
+      }
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // PATCH /api/v1/transactions/:id
+  router.patch('/:id', async (req: AuthedRequest, res: Response) => {
+    try {
+      // Validate the id before it reaches Postgres - a malformed uuid would
+      // otherwise blow up the query and surface as an ugly 500.
+      const id = transactionIdParamSchema.parse(req.params.id);
+      const patch = updateTransactionSchema.parse(req.body);
+
+      const derived: UpdateDerived = {};
+      if (patch.merchantRaw !== undefined) {
+        derived.merchantKey = normalizeMerchant(patch.merchantRaw);
+      }
+      if (patch.categoryId !== undefined) {
+        // The caller picked the category - that's a manual override.
+        derived.categorySource = 'manual';
+      }
+
+      const updated = await repo.update(req.user!.uid, id, patch, derived);
+      // 404 covers both "no such row" and "not your row" - returning 403 for
+      // the latter would confirm the id exists for someone else.
+      if (!updated) return res.status(404).json({ error: 'not found' });
+      return res.status(200).json(updated);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(422).json({ error: 'validation failed', issues: err.issues });
+      }
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // DELETE /api/v1/transactions/:id
+  router.delete('/:id', async (req: AuthedRequest, res: Response) => {
+    try {
+      const id = transactionIdParamSchema.parse(req.params.id);
+      const deleted = await repo.delete(req.user!.uid, id);
+      if (!deleted) return res.status(404).json({ error: 'not found' });
+      return res.status(204).send();
     } catch (err) {
       if (err instanceof ZodError) {
         return res.status(422).json({ error: 'validation failed', issues: err.issues });

@@ -156,3 +156,153 @@ describe('normalizeMerchant', () => {
     expect(normalizeMerchant('DUNKIN #99201 MANCHESTER NH')).toBe('dunkin manchester nh');
   });
 });
+
+// Helper: create a row as the given user and return its id.
+async function seedTransaction(app: ReturnType<typeof makeApp>, token: string) {
+  const res = await request(app)
+    .post('/api/v1/transactions')
+    .set('Authorization', `Bearer ${token}`)
+    .send(validBody);
+  expect(res.status).toBe(201);
+  return res.body.id as string;
+}
+
+describe('PATCH /api/v1/transactions/:id', () => {
+  it('updates supplied fields and leaves the rest alone (200)', async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const res = await request(app)
+      .patch(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({ amountCents: 999, note: 'split with roommate' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.amountCents).toBe(999);
+    expect(res.body.note).toBe('split with roommate');
+    expect(res.body.merchantRaw).toBe(validBody.merchantRaw); // untouched
+  });
+
+  it('flips categorySource to manual when the category changes', async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang'); // auto-categorized
+
+    const res = await request(app)
+      .patch(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({ categoryId: 6 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.categoryId).toBe(6);
+    expect(res.body.categorySource).toBe('manual');
+  });
+
+  it('recomputes merchantKey when merchantRaw changes', async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const res = await request(app)
+      .patch(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({ merchantRaw: 'STARBUCKS #55 BOSTON MA' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.merchantKey).toBe('starbucks boston ma');
+  });
+
+  it("returns 404 when patching another user's row, leaving it unchanged", async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const res = await request(app)
+      .patch(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-elena')
+      .send({ amountCents: 1 });
+    expect(res.status).toBe(404);
+
+    // Kenyang's row is untouched.
+    const list = await request(app)
+      .get('/api/v1/transactions')
+      .set('Authorization', 'Bearer token-kenyang');
+    expect(list.body.items[0].amountCents).toBe(validBody.amountCents);
+  });
+
+  it('returns 404 for a well-formed id that does not exist', async () => {
+    const res = await request(makeApp())
+      .patch('/api/v1/transactions/00000000-0000-4000-8000-000000000000')
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({ note: 'ghost' });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects invalid field values (422)', async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const res = await request(app)
+      .patch(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({ amountCents: 5.75 });
+
+    expect(res.status).toBe(422);
+    expect(res.body.issues[0].path).toContain('amountCents');
+  });
+
+  it('rejects an empty patch body (422)', async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const res = await request(app)
+      .patch(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({});
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects a malformed id (422)', async () => {
+    const res = await request(makeApp())
+      .patch('/api/v1/transactions/not-a-uuid')
+      .set('Authorization', 'Bearer token-kenyang')
+      .send({ note: 'x' });
+    expect(res.status).toBe(422);
+  });
+});
+
+describe('DELETE /api/v1/transactions/:id', () => {
+  it('deletes an owned row (204) and the row is gone', async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const del = await request(app)
+      .delete(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-kenyang');
+    expect(del.status).toBe(204);
+
+    const list = await request(app)
+      .get('/api/v1/transactions')
+      .set('Authorization', 'Bearer token-kenyang');
+    expect(list.body.items).toHaveLength(0);
+  });
+
+  it("returns 404 when deleting another user's row, leaving it intact", async () => {
+    const app = makeApp();
+    const id = await seedTransaction(app, 'token-kenyang');
+
+    const res = await request(app)
+      .delete(`/api/v1/transactions/${id}`)
+      .set('Authorization', 'Bearer token-elena');
+    expect(res.status).toBe(404);
+
+    const list = await request(app)
+      .get('/api/v1/transactions')
+      .set('Authorization', 'Bearer token-kenyang');
+    expect(list.body.items).toHaveLength(1);
+  });
+
+  it('returns 404 for a row that never existed', async () => {
+    const res = await request(makeApp())
+      .delete('/api/v1/transactions/00000000-0000-4000-8000-000000000000')
+      .set('Authorization', 'Bearer token-kenyang');
+    expect(res.status).toBe(404);
+  });
+});

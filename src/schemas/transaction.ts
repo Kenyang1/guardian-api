@@ -25,6 +25,17 @@ export const createTransactionSchema = z.object({
   note: z.string().max(500).optional(),
 });
 
+// PATCH body: same fields as create, all optional. The row id comes from the
+// URL, never the body. An empty patch is almost certainly a client bug, so we
+// reject it loudly instead of treating it as a no-op.
+export const updateTransactionSchema = createTransactionSchema
+  .partial()
+  .refine((obj) => Object.keys(obj).length > 0, {
+    message: 'at least one field is required',
+  });
+
+export const transactionIdParamSchema = z.string().uuid('id must be a UUID');
+
 export const listTransactionsQuerySchema = z.object({
   month: z
     .string()
@@ -50,3 +61,4 @@ export const transactionResponseSchema = z.object({
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type ListTransactionsQuery = z.infer<typeof listTransactionsQuerySchema>;
 export type Transaction = z.infer<typeof transactionResponseSchema>;
+export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;

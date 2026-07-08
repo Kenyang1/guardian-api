@@ -1,6 +1,10 @@
 import { randomUUID } from 'crypto';
 import type { Pool } from 'pg';
-import type { CreateTransactionInput, Transaction } from '../schemas/transaction';
+import type {
+  CreateTransactionInput,
+  Transaction,
+  UpdateTransactionInput,
+} from '../schemas/transaction';
 
 /**
  * Repository pattern: routes depend on this interface, never on a database
@@ -23,6 +27,14 @@ export interface ListResult {
   nextCursor: string | null;
 }
 
+// Recomputed fields that accompany an update: a new merchantRaw needs a new
+// merchantKey, and a caller-chosen category flips categorySource to 'manual'.
+// The route computes these; the repo just persists them.
+export interface UpdateDerived {
+  merchantKey?: string;
+  categorySource?: 'manual';
+}
+
 export interface TransactionsRepo {
   create(
     userId: string,
@@ -30,6 +42,17 @@ export interface TransactionsRepo {
     derived: { merchantKey: string; categoryId: number; categorySource: 'auto' | 'manual' },
   ): Promise<Transaction>;
   list(userId: string, opts: ListOptions): Promise<ListResult>;
+  // Every method below takes userId so ownership is checked atomically in the
+  // lookup itself - "not found" and "not yours" are indistinguishable by
+  // construction, which is what lets routes return 404 without leaking ids.
+  findById(userId: string, id: string): Promise<Transaction | null>;
+  update(
+    userId: string,
+    id: string,
+    patch: UpdateTransactionInput,
+    derived: UpdateDerived,
+  ): Promise<Transaction | null>;
+  delete(userId: string, id: string): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +96,35 @@ export class InMemoryTransactionsRepo implements TransactionsRepo {
     const page = items.slice(0, opts.limit);
     const nextCursor = items.length > opts.limit ? page[page.length - 1].id : null;
     return { items: page, nextCursor };
+  }
+
+  async findById(userId: string, id: string): Promise<Transaction | null> {
+    return this.rows.find((r) => r.id === id && r.userId === userId) ?? null;
+  }
+
+  async update(
+    userId: string,
+    id: string,
+    patch: UpdateTransactionInput,
+    derived: UpdateDerived,
+  ): Promise<Transaction | null> {
+    const row = this.rows.find((r) => r.id === id && r.userId === userId);
+    if (!row) return null;
+    if (patch.amountCents !== undefined) row.amountCents = patch.amountCents;
+    if (patch.merchantRaw !== undefined) row.merchantRaw = patch.merchantRaw;
+    if (patch.occurredAt !== undefined) row.occurredAt = patch.occurredAt;
+    if (patch.categoryId !== undefined) row.categoryId = patch.categoryId;
+    if (patch.note !== undefined) row.note = patch.note;
+    if (derived.merchantKey !== undefined) row.merchantKey = derived.merchantKey;
+    if (derived.categorySource !== undefined) row.categorySource = derived.categorySource;
+    return row;
+  }
+
+  async delete(userId: string, id: string): Promise<boolean> {
+    const i = this.rows.findIndex((r) => r.id === id && r.userId === userId);
+    if (i < 0) return false;
+    this.rows.splice(i, 1);
+    return true;
   }
 }
 
@@ -134,6 +186,60 @@ export class PostgresTransactionsRepo implements TransactionsRepo {
     const hasMore = rows.length > opts.limit;
     const page = rows.slice(0, opts.limit).map(mapRow);
     return { items: page, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
+
+  async findById(userId: string, id: string): Promise<Transaction | null> {
+    const { rows } = await this.pool.query(
+      `select id, user_id, amount_cents, merchant_raw, merchant_key,
+              category_id, category_source, occurred_at, note, created_at
+         from transactions
+        where id = $1 and user_id = $2`,
+      [id, userId],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  async update(
+    userId: string,
+    id: string,
+    patch: UpdateTransactionInput,
+    derived: UpdateDerived,
+  ): Promise<Transaction | null> {
+    // Dynamic SET clause: same params.push / $n trick as the WHERE in list().
+    // Only columns present in the patch are updated.
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const set = (column: string, value: unknown) => {
+      params.push(value);
+      sets.push(`${column} = $${params.length}`);
+    };
+    if (patch.amountCents !== undefined) set('amount_cents', patch.amountCents);
+    if (patch.merchantRaw !== undefined) set('merchant_raw', patch.merchantRaw);
+    if (patch.occurredAt !== undefined) set('occurred_at', patch.occurredAt);
+    if (patch.categoryId !== undefined) set('category_id', patch.categoryId);
+    if (patch.note !== undefined) set('note', patch.note);
+    if (derived.merchantKey !== undefined) set('merchant_key', derived.merchantKey);
+    if (derived.categorySource !== undefined) set('category_source', derived.categorySource);
+    if (sets.length === 0) return this.findById(userId, id);
+
+    params.push(id, userId);
+    const { rows } = await this.pool.query(
+      `update transactions
+          set ${sets.join(', ')}
+        where id = $${params.length - 1} and user_id = $${params.length}
+        returning id, user_id, amount_cents, merchant_raw, merchant_key,
+                  category_id, category_source, occurred_at, note, created_at`,
+      params,
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  async delete(userId: string, id: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(
+      `delete from transactions where id = $1 and user_id = $2`,
+      [id, userId],
+    );
+    return (rowCount ?? 0) > 0;
   }
 }
 
