@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { PostgresTransactionsRepo } from '../src/repos/transactionsRepo';
+import { PostgresBudgetsRepo } from '../src/repos/budgetsRepo';
 
 /**
  * Unit tests for the Postgres repo with a stubbed pool: no database needed.
@@ -171,6 +172,92 @@ describe('PostgresTransactionsRepo', () => {
       const repo = new PostgresTransactionsRepo(pool);
       const result = await repo.list('user-kenyang', { limit: 2 });
       expect(result.nextCursor).toBeNull();
+    });
+  });
+});
+
+const budgetDbRow = {
+  id: '44444444-4444-4444-8444-444444444444',
+  user_id: 'user-kenyang',
+  category_id: '1',
+  month: '2026-07',
+  limit_cents: '20000',
+  created_at: '2026-07-08T03:00:00.000Z',
+};
+
+describe('PostgresBudgetsRepo', () => {
+  describe('upsert', () => {
+    it('uses ON CONFLICT on the (user_id, category_id, month) key', async () => {
+      const { pool, query } = makePool({ rows: [budgetDbRow] });
+      const repo = new PostgresBudgetsRepo(pool);
+
+      const saved = await repo.upsert('user-kenyang', {
+        categoryId: 1,
+        month: '2026-07',
+        limitCents: 20000,
+      });
+
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/on conflict \(user_id, category_id, month\)/);
+      expect(sql).toMatch(/do update set limit_cents = excluded\.limit_cents/);
+      expect(params).toEqual(['user-kenyang', 1, '2026-07', 20000]);
+      expect(saved.limitCents).toBe(20000);
+      expect(saved.categoryId).toBe(1);
+    });
+  });
+
+  describe('list', () => {
+    it('filters by month only when one is given', async () => {
+      const { pool, query } = makePool({ rows: [budgetDbRow] });
+      const repo = new PostgresBudgetsRepo(pool);
+
+      await repo.list('user-kenyang', '2026-07');
+      let [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/user_id = \$1 and month = \$2/);
+      expect(params).toEqual(['user-kenyang', '2026-07']);
+
+      await repo.list('user-kenyang');
+      [sql, params] = query.mock.calls[1];
+      expect(sql).not.toMatch(/month = \$/);
+      expect(params).toEqual(['user-kenyang']);
+    });
+  });
+
+  describe('monthlyInsights', () => {
+    it('left-joins spend so zero-spend budgets still appear, and computes remaining', async () => {
+      const { pool, query } = makePool({
+        rows: [
+          { category_id: '1', category_name: 'Food & Drink', limit_cents: '20000', spent_cents: '1775' },
+          { category_id: '6', category_name: 'Entertainment', limit_cents: '5000', spent_cents: '0' },
+        ],
+      });
+      const repo = new PostgresBudgetsRepo(pool);
+
+      const rows = await repo.monthlyInsights('user-kenyang', '2026-07');
+
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/left join/);
+      expect(sql).toMatch(/sum\(amount_cents\)/);
+      expect(sql).toMatch(/coalesce\(t\.spent_cents, 0\)/);
+      // $1 user, $2 month start date for the spend window, $3 budget month key
+      expect(params).toEqual(['user-kenyang', '2026-07-01', '2026-07']);
+
+      expect(rows).toEqual([
+        {
+          categoryId: 1,
+          categoryName: 'Food & Drink',
+          limitCents: 20000,
+          spentCents: 1775,
+          remainingCents: 18225,
+        },
+        {
+          categoryId: 6,
+          categoryName: 'Entertainment',
+          limitCents: 5000,
+          spentCents: 0,
+          remainingCents: 5000,
+        },
+      ]);
     });
   });
 });

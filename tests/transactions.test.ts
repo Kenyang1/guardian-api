@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { buildApp } from '../src/app';
 import { InMemoryTransactionsRepo } from '../src/repos/transactionsRepo';
+import { InMemoryBudgetsRepo } from '../src/repos/budgetsRepo';
 import { normalizeMerchant } from '../src/routes/transactions';
 
 /**
@@ -15,13 +16,15 @@ const USERS: Record<string, { uid: string }> = {
 };
 
 function makeApp() {
+  const transactionsRepo = new InMemoryTransactionsRepo();
   return buildApp({
     verifyToken: async (token) => {
       const user = USERS[token];
       if (!user) throw new Error('bad token');
       return user;
     },
-    transactionsRepo: new InMemoryTransactionsRepo(),
+    transactionsRepo,
+    budgetsRepo: new InMemoryBudgetsRepo(transactionsRepo),
     categorize: async (merchantRaw) => (merchantRaw.toUpperCase().includes('DUNKIN') ? 1 : 10),
   });
 }

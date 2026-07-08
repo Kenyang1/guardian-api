@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { buildApp } from './app';
 import { firebaseTokenVerifier } from './auth/firebaseVerifier';
 import { PostgresTransactionsRepo } from './repos/transactionsRepo';
+import { PostgresBudgetsRepo } from './repos/budgetsRepo';
 
 /**
  * Production wiring. The categorizer below is a placeholder that returns
@@ -20,6 +21,7 @@ const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized
 const app = buildApp({
   verifyToken: firebaseTokenVerifier(projectId),
   transactionsRepo: new PostgresTransactionsRepo(pool),
+  budgetsRepo: new PostgresBudgetsRepo(pool),
   categorize: async () => 10, // TODO: wire the LLM merchant-categorization flow here
 });
 
