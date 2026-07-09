@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: Guardian API
+  version: 1.0.0
+  description: REST API for Guardian - student budgeting with trusted-viewer access.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase ID token
+paths:
+  /api/v1/health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: API is up
+          content:
+            application/json:
+              example: { ok: true }
+  /api/v1/categorize:
+    post:
+      summary: Categorize a merchant string (cache-first, LLM on miss)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { merchantRaw: "DUNKIN #341782 MANCHESTER NH" }
+      responses:
+        "200":
+          description: Category assigned, with its source (cache, llm, or fallback)
+          content:
+            application/json:
+              example:
+                merchantKey: dunkin manchester nh
+                categoryId: 1
+                categoryName: Food & Drink
+                source: llm
+        "401":
+          description: Missing or invalid Firebase ID token
+        "422":
+          description: Validation failed (merchantRaw missing, empty, or over 200 chars)
