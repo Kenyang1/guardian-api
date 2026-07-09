@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { PostgresTransactionsRepo } from '../src/repos/transactionsRepo';
 import { PostgresBudgetsRepo } from '../src/repos/budgetsRepo';
 import { PostgresViewersRepo } from '../src/repos/viewersRepo';
+import { PostgresMerchantCategoriesRepo } from '../src/repos/merchantCategoriesRepo';
 
 /**
  * Unit tests for the Postgres repo with a stubbed pool: no database needed.
@@ -383,3 +384,60 @@ describe('PostgresViewersRepo', () => {
       expect(items[0].ownerUid).toBe('user-kenyang');
     });
   });
+
+const merchantDbRow = {
+  merchant_key: 'dunkin manchester nh',
+  raw_example: 'DUNKIN #341782 MANCHESTER NH',
+  category_id: '1',
+  source: 'llm',
+  created_at: '2026-07-09T05:00:00.000Z',
+};
+
+describe('PostgresMerchantCategoriesRepo', () => {
+  it('getByKey selects by merchant_key and maps the row', async () => {
+    const { pool, query } = makePool({ rows: [merchantDbRow] });
+    const repo = new PostgresMerchantCategoriesRepo(pool);
+
+    const hit = await repo.getByKey('dunkin manchester nh');
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/where merchant_key = \$1/);
+    expect(params).toEqual(['dunkin manchester nh']);
+    expect(hit).toMatchObject({ merchantKey: 'dunkin manchester nh', categoryId: 1 });
+
+    const { pool: emptyPool } = makePool({ rows: [] });
+    expect(await new PostgresMerchantCategoriesRepo(emptyPool).getByKey('nope')).toBeNull();
+  });
+
+  it('upsert targets the merchant_key primary key', async () => {
+    const { pool, query } = makePool({ rows: [merchantDbRow] });
+    const repo = new PostgresMerchantCategoriesRepo(pool);
+
+    await repo.upsert({
+      merchantKey: 'dunkin manchester nh',
+      rawExample: 'DUNKIN #341782 MANCHESTER NH',
+      categoryId: 1,
+      source: 'llm',
+    });
+
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/insert into merchant_categories/);
+    expect(sql).toMatch(/on conflict \(merchant_key\)/);
+    expect(sql).toMatch(/do update set category_id = excluded\.category_id/);
+    expect(params).toEqual(['dunkin manchester nh', 'DUNKIN #341782 MANCHESTER NH', 1, 'llm']);
+  });
+
+  it('logEvent inserts into categorization_events', async () => {
+    const { pool, query } = makePool({ rowCount: 1 });
+    const repo = new PostgresMerchantCategoriesRepo(pool);
+
+    await repo.logEvent('dunkin manchester nh', 'cache_hit', 1);
+    let [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/insert into categorization_events/);
+    expect(params).toEqual(['dunkin manchester nh', 'cache_hit', 1]);
+
+    // Fallback events carry no category.
+    await repo.logEvent('mystery merchant', 'llm_error_fallback', null);
+    [sql, params] = query.mock.calls[1];
+    expect(params).toEqual(['mystery merchant', 'llm_error_fallback', null]);
+  });
+});

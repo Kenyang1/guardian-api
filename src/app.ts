@@ -5,9 +5,11 @@ import { budgetsRouter } from './routes/budgets';
 import { insightsRouter } from './routes/insights';
 import { viewersRouter } from './routes/viewers';
 import { sharedRouter } from './routes/shared';
+import { categorizeRouter } from './routes/categorize';
 import type { TransactionsRepo } from './repos/transactionsRepo';
 import type { BudgetsRepo } from './repos/budgetsRepo';
 import type { ViewersRepo } from './repos/viewersRepo';
+import type { CategorizationService } from './categorization/categorizer';
 
 /**
  * App factory: all external dependencies (auth verifier, repos, categorizer)
@@ -19,6 +21,7 @@ export interface AppDeps {
   budgetsRepo: BudgetsRepo;
   viewersRepo: ViewersRepo;
   categorize: Categorizer;
+  categorization: CategorizationService;
 }
 
 export function buildApp(deps: AppDeps) {
@@ -38,6 +41,7 @@ export function buildApp(deps: AppDeps) {
   app.use('/api/v1/insights', auth, insightsRouter(deps.budgetsRepo));
   app.use('/api/v1/viewers', auth, viewersRouter(deps.viewersRepo));
   app.use('/api/v1/shared', auth, sharedRouter(deps.viewersRepo, deps.budgetsRepo));
+  app.use('/api/v1/categorize', auth, categorizeRouter(deps.categorization));
 
   return app;
 }

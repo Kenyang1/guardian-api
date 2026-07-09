@@ -3,6 +3,8 @@ import { buildApp } from '../src/app';
 import { InMemoryTransactionsRepo } from '../src/repos/transactionsRepo';
 import { InMemoryBudgetsRepo } from '../src/repos/budgetsRepo';
 import { InMemoryViewersRepo } from '../src/repos/viewersRepo';
+import { InMemoryMerchantCategoriesRepo } from '../src/repos/merchantCategoriesRepo';
+import { makeCachedCategorizer } from '../src/categorization/categorizer';
 
 /**
  * Trusted-viewers suite. The four tests that matter (per the build guide):
@@ -31,6 +33,10 @@ function makeApp() {
     budgetsRepo: new InMemoryBudgetsRepo(transactionsRepo),
     viewersRepo: new InMemoryViewersRepo(),
     categorize: async (merchantRaw) => (merchantRaw.toUpperCase().includes('DUNKIN') ? 1 : 10),
+    categorization: makeCachedCategorizer(
+      new InMemoryMerchantCategoriesRepo(),
+      async (merchantRaw) => (merchantRaw.toUpperCase().includes('DUNKIN') ? 1 : 10),
+    ),
   });
 }
 
