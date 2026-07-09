@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { PostgresTransactionsRepo } from '../src/repos/transactionsRepo';
 import { PostgresBudgetsRepo } from '../src/repos/budgetsRepo';
+import { PostgresViewersRepo } from '../src/repos/viewersRepo';
 
 /**
  * Unit tests for the Postgres repo with a stubbed pool: no database needed.
@@ -261,3 +262,124 @@ describe('PostgresBudgetsRepo', () => {
     });
   });
 });
+
+const viewerDbRow = {
+  id: '55555555-5555-4555-8555-555555555555',
+  owner_uid: 'user-kenyang',
+  viewer_email: 'elena@example.com',
+  viewer_uid: null,
+  status: 'pending',
+  created_at: '2026-07-08T04:00:00.000Z',
+};
+
+describe('PostgresViewersRepo', () => {
+  describe('invite', () => {
+    it('upserts on (owner_uid, viewer_email), re-opening only revoked rows', async () => {
+      const { pool, query } = makePool({ rows: [viewerDbRow] });
+      const repo = new PostgresViewersRepo(pool);
+
+      const invite = await repo.invite('user-kenyang', 'Elena@Example.com');
+
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/on conflict \(owner_uid, viewer_email\)/);
+      expect(sql).toMatch(/where trusted_viewers\.status = 'revoked'/);
+      expect(params).toEqual(['user-kenyang', 'elena@example.com']); // lowercased
+      expect(invite.status).toBe('pending');
+      expect(invite.viewerUid).toBeNull();
+    });
+
+    it('falls back to selecting the existing row when the upsert returns none', async () => {
+      const acceptedRow = { ...viewerDbRow, viewer_uid: 'user-elena', status: 'accepted' };
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // conflict, not revoked
+        .mockResolvedValueOnce({ rows: [acceptedRow], rowCount: 1 });
+      const repo = new PostgresViewersRepo({ query } as unknown as Pool);
+
+      const invite = await repo.invite('user-kenyang', 'elena@example.com');
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(invite.status).toBe('accepted'); // unchanged, idempotent
+    });
+  });
+
+  describe('accept', () => {
+    it('requires id + pending status + matching email in one atomic update', async () => {
+      const accepted = { ...viewerDbRow, viewer_uid: 'user-elena', status: 'accepted' };
+      const { pool, query } = makePool({ rows: [accepted] });
+      const repo = new PostgresViewersRepo(pool);
+
+      const row = await repo.accept(viewerDbRow.id, 'user-elena', 'Elena@Example.com');
+
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/status = 'pending' and viewer_email = \$3/);
+      expect(params).toEqual(['user-elena', viewerDbRow.id, 'elena@example.com']);
+      expect(row?.viewerUid).toBe('user-elena');
+    });
+
+    it('returns null when no pending invite matches', async () => {
+      const { pool } = makePool({ rows: [] });
+      const repo = new PostgresViewersRepo(pool);
+      expect(await repo.accept(viewerDbRow.id, 'user-marc', 'marc@example.com')).toBeNull();
+    });
+  });
+
+  describe('revoke', () => {
+    it('is owner-scoped and returns false when nothing matched', async () => {
+      const { pool, query } = makePool({ rowCount: 1 });
+      const repo = new PostgresViewersRepo(pool);
+
+      expect(await repo.revoke('user-kenyang', viewerDbRow.id)).toBe(true);
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/set status = 'revoked'/);
+      expect(sql).toMatch(/where id = \$1 and owner_uid = \$2/);
+      expect(params).toEqual([viewerDbRow.id, 'user-kenyang']);
+
+      const { pool: emptyPool } = makePool({ rowCount: 0 });
+      expect(await new PostgresViewersRepo(emptyPool).revoke('user-elena', viewerDbRow.id)).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('hasAcceptedAccess', () => {
+    it("matches only status = 'accepted' rows linking owner and viewer", async () => {
+      const { pool, query } = makePool({ rowCount: 1 });
+      const repo = new PostgresViewersRepo(pool);
+
+      expect(await repo.hasAcceptedAccess('user-kenyang', 'user-elena')).toBe(true);
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/owner_uid = \$1 and viewer_uid = \$2 and status = 'accepted'/);
+      expect(params).toEqual(['user-kenyang', 'user-elena']);
+
+      const { pool: emptyPool } = makePool({ rowCount: 0 });
+      expect(
+        await new PostgresViewersRepo(emptyPool).hasAcceptedAccess('user-kenyang', 'user-marc'),
+      ).toBe(false);
+    });
+  });
+});
+
+  describe('listForOwner / sharedWithMe', () => {
+    it('scopes owner listings by owner_uid', async () => {
+      const { pool, query } = makePool({ rows: [viewerDbRow] });
+      const repo = new PostgresViewersRepo(pool);
+
+      const items = await repo.listForOwner('user-kenyang');
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/where owner_uid = \$1/);
+      expect(params).toEqual(['user-kenyang']);
+      expect(items[0].viewerEmail).toBe('elena@example.com');
+    });
+
+    it('shared-with-me returns only accepted rows for the viewer', async () => {
+      const acceptedRow = { ...viewerDbRow, viewer_uid: 'user-elena', status: 'accepted' };
+      const { pool, query } = makePool({ rows: [acceptedRow] });
+      const repo = new PostgresViewersRepo(pool);
+
+      const items = await repo.sharedWithMe('user-elena');
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/viewer_uid = \$1 and status = 'accepted'/);
+      expect(params).toEqual(['user-elena']);
+      expect(items[0].ownerUid).toBe('user-kenyang');
+    });
+  });

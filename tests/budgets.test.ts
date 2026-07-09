@@ -2,6 +2,7 @@ import request from 'supertest';
 import { buildApp } from '../src/app';
 import { InMemoryTransactionsRepo } from '../src/repos/transactionsRepo';
 import { InMemoryBudgetsRepo } from '../src/repos/budgetsRepo';
+import { InMemoryViewersRepo } from '../src/repos/viewersRepo';
 
 /**
  * Budgets + insights suite. Same offline setup as transactions.test.ts:
@@ -23,6 +24,7 @@ function makeApp() {
     },
     transactionsRepo,
     budgetsRepo: new InMemoryBudgetsRepo(transactionsRepo),
+    viewersRepo: new InMemoryViewersRepo(),
     categorize: async (merchantRaw) => (merchantRaw.toUpperCase().includes('DUNKIN') ? 1 : 10),
   });
 }

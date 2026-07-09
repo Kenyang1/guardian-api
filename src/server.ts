@@ -4,6 +4,7 @@ import { buildApp } from './app';
 import { firebaseTokenVerifier } from './auth/firebaseVerifier';
 import { PostgresTransactionsRepo } from './repos/transactionsRepo';
 import { PostgresBudgetsRepo } from './repos/budgetsRepo';
+import { PostgresViewersRepo } from './repos/viewersRepo';
 
 /**
  * Production wiring. The categorizer below is a placeholder that returns
@@ -22,6 +23,7 @@ const app = buildApp({
   verifyToken: firebaseTokenVerifier(projectId),
   transactionsRepo: new PostgresTransactionsRepo(pool),
   budgetsRepo: new PostgresBudgetsRepo(pool),
+  viewersRepo: new PostgresViewersRepo(pool),
   categorize: async () => 10, // TODO: wire the LLM merchant-categorization flow here
 });
 
