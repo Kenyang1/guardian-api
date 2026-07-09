@@ -44,3 +44,348 @@ paths:
           description: Missing or invalid Firebase ID token
         "422":
           description: Validation failed (merchantRaw missing, empty, or over 200 chars)
+  /api/v1/insights/monthly:
+    get:
+      summary: Budget vs. spent per category for one month
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: month
+          in: query
+          required: true
+          description: Month to report on, YYYY-MM
+          schema:
+            type: string
+            example: "2026-07"
+      responses:
+        "200":
+          description: Per-category limit, spent, and remaining
+          content:
+            application/json:
+              example:
+                month: "2026-07"
+                categories:
+                  - categoryId: 1
+                    categoryName: Food & Drink
+                    limitCents: 25000
+                    spentCents: 575
+                    remainingCents: 24425
+        "401":
+          description: Missing or invalid Firebase ID token
+        "422":
+          description: Validation failed (month missing or not YYYY-MM)
+  /api/v1/transactions:
+    post:
+      summary: Log a transaction (auto-categorized unless categoryId supplied)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              amountCents: 575
+              merchantRaw: "DUNKIN #341782 MANCHESTER NH"
+              occurredAt: "2026-07-06T12:30:00.000Z"
+              note: morning coffee
+      responses:
+        "201":
+          description: Transaction created
+          content:
+            application/json:
+              example:
+                id: 8e0b5a04-d9a3-4361-8fa4-4fca2471cf7c
+                userId: 7uI37bJvcwZpIuSdCLcp6ApOkXG3
+                amountCents: 575
+                merchantRaw: "DUNKIN #341782 MANCHESTER NH"
+                merchantKey: dunkin manchester nh
+                categoryId: 1
+                categorySource: auto
+                occurredAt: "2026-07-06T12:30:00.000Z"
+                note: morning coffee
+                createdAt: "2026-07-08T02:21:18.418Z"
+        "401":
+          description: Missing or invalid Firebase ID token
+        "422":
+          description: Validation failed (amountCents not a positive integer, merchantRaw missing, occurredAt not ISO 8601)
+    get:
+      summary: List my transactions, newest first (cursor pagination)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Filter to one month, YYYY-MM
+          schema:
+            type: string
+            example: "2026-07"
+        - name: limit
+          in: query
+          required: false
+          description: Page size (default 25, max 100)
+          schema:
+            type: integer
+            example: 25
+        - name: cursor
+          in: query
+          required: false
+          description: id of the last row from the previous page
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: One page of transactions plus the cursor for the next
+          content:
+            application/json:
+              example:
+                items:
+                  - id: 8e0b5a04-d9a3-4361-8fa4-4fca2471cf7c
+                    amountCents: 575
+                    merchantRaw: "DUNKIN #341782 MANCHESTER NH"
+                    categoryId: 1
+                    occurredAt: "2026-07-06T12:30:00.000Z"
+                nextCursor: null
+        "401":
+          description: Missing or invalid Firebase ID token
+        "422":
+          description: Validation failed (month not YYYY-MM, limit out of range, cursor not a uuid)
+  /api/v1/transactions/{id}:
+    patch:
+      summary: Partially update my transaction (category change flips categorySource to manual)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { categoryId: 6, note: actually entertainment }
+      responses:
+        "200":
+          description: Updated transaction
+          content:
+            application/json:
+              example:
+                id: 8e0b5a04-d9a3-4361-8fa4-4fca2471cf7c
+                categoryId: 6
+                categorySource: manual
+                note: actually entertainment
+        "401":
+          description: Missing or invalid Firebase ID token
+        "404":
+          description: Not found - or not yours (deliberately indistinguishable)
+        "422":
+          description: Validation failed (empty patch, bad field values, malformed id)
+    delete:
+      summary: Delete my transaction
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted (no body)
+        "401":
+          description: Missing or invalid Firebase ID token
+        "404":
+          description: Not found - or not yours (deliberately indistinguishable)
+  /api/v1/budgets:
+    post:
+      summary: Set a monthly budget for a category (upsert - re-posting replaces the limit)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { categoryId: 1, month: "2026-07", limitCents: 25000 }
+      responses:
+        "201":
+          description: Budget created or replaced
+          content:
+            application/json:
+              example:
+                id: 5f295d2b-1503-4410-82cd-67262797075d
+                categoryId: 1
+                month: "2026-07"
+                limitCents: 25000
+        "401":
+          description: Missing or invalid Firebase ID token
+        "422":
+          description: Validation failed (categoryId not 1-10, month not YYYY-MM, limitCents not a positive integer)
+    get:
+      summary: List my budgets
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Filter to one month, YYYY-MM
+          schema:
+            type: string
+            example: "2026-07"
+      responses:
+        "200":
+          description: My budgets, newest month first
+          content:
+            application/json:
+              example:
+                items:
+                  - id: 5f295d2b-1503-4410-82cd-67262797075d
+                    categoryId: 1
+                    month: "2026-07"
+                    limitCents: 25000
+        "401":
+          description: Missing or invalid Firebase ID token
+  /api/v1/viewers/invite:
+    post:
+      summary: Invite a trusted viewer by email (read-only access once accepted)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { email: mom@example.com }
+      responses:
+        "201":
+          description: Invite created (pending) - re-inviting a revoked viewer re-opens it
+          content:
+            application/json:
+              example:
+                id: 2e4b04cf-ee3c-415d-9beb-64cf1dbf855f
+                viewerEmail: mom@example.com
+                viewerUid: null
+                status: pending
+        "401":
+          description: Missing or invalid Firebase ID token
+        "422":
+          description: Validation failed (malformed email, or inviting yourself)
+  /api/v1/viewers/accept/{inviteId}:
+    post:
+      summary: Accept an invite (caller's verified token email must match the invited email)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: inviteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Invite accepted - caller's uid is now bound to it
+          content:
+            application/json:
+              example:
+                id: 2e4b04cf-ee3c-415d-9beb-64cf1dbf855f
+                viewerUid: KJrHeKebIPNgmvVM5AcBQ5I6naX2
+                status: accepted
+        "401":
+          description: Missing or invalid Firebase ID token
+        "404":
+          description: No pending invite for you at this id (missing, already handled, or addressed to someone else)
+  /api/v1/viewers/{id}:
+    delete:
+      summary: Revoke a viewer (owner only; row is kept with status revoked)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Revoked (no body)
+        "401":
+          description: Missing or invalid Firebase ID token
+        "404":
+          description: Not found - or not yours
+  /api/v1/viewers:
+    get:
+      summary: List everyone I have invited (all statuses)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: My invites
+          content:
+            application/json:
+              example:
+                items:
+                  - viewerEmail: mom@example.com
+                    status: accepted
+        "401":
+          description: Missing or invalid Firebase ID token
+  /api/v1/viewers/shared-with-me:
+    get:
+      summary: List owners who shared their dashboard with me (accepted only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Accepted shares, viewer side
+          content:
+            application/json:
+              example:
+                items:
+                  - ownerUid: 7uI37bJvcwZpIuSdCLcp6ApOkXG3
+                    status: accepted
+        "401":
+          description: Missing or invalid Firebase ID token
+  /api/v1/shared/{ownerUid}/insights/monthly:
+    get:
+      summary: Read-only viewer dashboard - an owner's monthly insights (owner or accepted viewer only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: ownerUid
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: month
+          in: query
+          required: true
+          description: Month to report on, YYYY-MM
+          schema:
+            type: string
+            example: "2026-07"
+      responses:
+        "200":
+          description: The owner's per-category insights
+          content:
+            application/json:
+              example:
+                ownerUid: 7uI37bJvcwZpIuSdCLcp6ApOkXG3
+                month: "2026-07"
+                categories:
+                  - categoryId: 1
+                    categoryName: Food & Drink
+                    limitCents: 25000
+                    spentCents: 575
+                    remainingCents: 24425
+        "401":
+          description: Missing or invalid Firebase ID token
+        "403":
+          description: Authenticated but not permitted (no accepted trusted-viewer link)
+        "422":
+          description: Validation failed (month missing or not YYYY-MM)

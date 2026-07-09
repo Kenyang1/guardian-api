@@ -1,4 +1,7 @@
+import path from 'path';
 import express from 'express';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
 import { requireAuth, type TokenVerifier } from './middleware/auth';
 import { transactionsRouter, type Categorizer } from './routes/transactions';
 import { budgetsRouter } from './routes/budgets';
@@ -29,6 +32,12 @@ export function buildApp(deps: AppDeps) {
   app.use(express.json());
 
   app.get('/api/v1/health', (_req, res) => res.json({ ok: true }));
+
+  // Interactive API docs. The spec is hand-written (openapi.yaml at the repo
+  // root); /docs is deliberately public - it documents the API, it can't call
+  // anything without a bearer token. Resolves from src/ (ts-node) and dist/.
+  const openapiSpec = YAML.load(path.join(__dirname, '..', 'openapi.yaml'));
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
   const auth = requireAuth(deps.verifyToken);
 
