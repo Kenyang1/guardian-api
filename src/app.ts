@@ -1,5 +1,6 @@
 import path from 'path';
 import express from 'express';
+import cors from 'cors';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yamljs';
 import { requireAuth, type TokenVerifier } from './middleware/auth';
@@ -29,6 +30,10 @@ export interface AppDeps {
 
 export function buildApp(deps: AppDeps) {
   const app = express();
+  // Browsers block cross-origin reads unless the server opts in. Open CORS is
+  // correct here: this is a public API where EVERY request is authenticated by
+  // a bearer token - CORS is not an auth layer, the JWT verification is.
+  app.use(cors());
   app.use(express.json());
 
   app.get('/api/v1/health', (_req, res) => res.json({ ok: true }));
